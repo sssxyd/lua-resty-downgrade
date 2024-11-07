@@ -1,0 +1,37 @@
+[api.store_settings_packages_getPageData]
+type = "timeout"
+backend_url = "http://127.0.0.1:8080"
+timeout_ms = 250
+response = '''
+{
+    "code": 0,
+    "msg": "success",
+    "result": {
+        "total": 1,
+        "data": [
+            {
+                "id": 1,
+                "name": "test",
+                "description": "test",
+                "status": 1,
+                "createTime": 1600000000,
+                "updateTime": 1600000000
+            }
+        ]
+    }
+}
+'''
+
+[api.store_sell_order_sendGetTrafficnoForST]
+type = "callback"
+backend_url = "http://127.0.0.1:8080"
+callback_url = "http://192.168.1.1:18080/handle_callback"
+response = '''
+{
+    "code": 0,
+    "msg": "success",
+    "result": {
+        "trafficno": "test"
+    }
+}
+'''
