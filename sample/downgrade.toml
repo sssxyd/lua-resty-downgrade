@@ -2,7 +2,9 @@
 type = "timeout"
 backend_url = "http://127.0.0.1:8080"
 timeout_ms = 250
-response = '''
+#status_code = 200
+#content_type = "application/json; charset=utf-8"
+resp_body = '''
 {
     "code": 0,
     "msg": "success",
@@ -26,7 +28,10 @@ response = '''
 type = "callback"
 backend_url = "http://127.0.0.1:8080"
 callback_url = "http://192.168.1.1:18080/handle_callback"
-response = '''
+#callback_credentials_header = "X-Callback-Credentials"
+#content_type = "application/json; charset=utf-8"
+#status_code = 200
+resp_body = '''
 {
     "code": 0,
     "msg": "success",
