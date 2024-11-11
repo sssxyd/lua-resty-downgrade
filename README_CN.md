@@ -14,7 +14,6 @@ yum-config-manager --add-repo https://openresty.org/package/centos/openresty2.re
 yum install -y openresty
 yum install -y openresty-opm openresty-resty
 
-opm get ledgetech/lua-resty-http
 opm get sssxyd/lua-resty-downgrade
 
 systemctl enable openresty
