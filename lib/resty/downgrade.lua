@@ -863,7 +863,7 @@ local function async_request_and_callback(backend_url, request_time, request_uri
     -- 向后端服务器发送请求
     local res, err = _async_http_request(backend_url, req_method, req_headers, req_body, _M._Http_Timeout)
     if not res then
-        ngx.log(ngx.ERR, "async http reuest to ", backend_url, " failed: " err)
+        ngx.log(ngx.ERR, "async http reuest to ", backend_url, " failed: ", err)
         res = {
             status = ngx.HTTP_BAD_GATEWAY,
             headers = {
