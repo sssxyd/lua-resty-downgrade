@@ -1,5 +1,5 @@
 local _M = {
-  _VERSION = '0.1.1',
+  _VERSION = '0.1.2',
   _Http_Timeout = 60000,
   _Http_Keepalive = 60000,
   _Http_Pool_Size = 25,
