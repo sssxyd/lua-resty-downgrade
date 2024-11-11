@@ -1,16 +1,19 @@
 local _M = {
-  _VERSION = '0.1.1'
+  _VERSION = '0.1.1',
+  _Http_Timeout = 60000,
+  _Http_Keepalive = 60000,
+  _Http_Pool_Size = 25,
+  _Routers = {},
+  _Routers_Loaded = false,
 }
 
 local http = require("resty.http")
 local cjson = require("cjson")
 
-Routers = {}
-Routers_Loaded = false
 
-local function parse_toml(toml, options)
+local function _parse_toml(toml, options)
 	options = options or {}
-	local strict = (options.strict ~= nil and options.strict or TOML.strict)
+	local strict = (options.strict ~= nil and options.strict or false)
 
 	-- the official TOML definition of whitespace
 	local ws = "[\009\032]"
@@ -555,203 +558,31 @@ local function parse_toml(toml, options)
 	return out
 end
 
-function _M.load_rules(toml_path)
-    if Routers_Loaded then
-        return
-    end
-    Routers_Loaded = true
-
-    local config_file = io.open(toml_path, "r")
-    if not config_file then
-        ngx.log(ngx.ERR, "Failed to open config file " .. toml_path)
-        return
-    end
-
-    local config_content = config_file:read("*a")
-    config_file:close()
-
-    Routers = toml.parse(config_content)
-end
-
-function _M.proxy_pass(uri)
-    local route = Routers[uri]
-    if not route then
-        return
-    end
-    local type = route["type"]
-    local backend_url = route["backend_url"] or ""
-    local callback_url = route["callback_url"] or ""
-    local callback_credentials_header = route["callback_credentials_header"] or "X-Callback-Credentials"
-    local timeout_ms = route["timeout_ms"] or 0
-    local resp_body = route["resp_body"] or ""
-    local content_type = route["content_type"] or "application/json; charset=utf-8"
-    local status_code = route["status_code"] or 200
-
-    if backend_url == "" then
-        ngx.log(ngx.ERR, "No backend URL specified for route ", uri)
-        return
-    end
-
-    if resp_body == "" then
-        ngx.log(ngx.ERR, "No response body specified for route ", uri)
-        return
-    end
-
-    if type == "callback" and callback_url == "" then
-        ngx.log(ngx.ERR, "No callback URL specified for route ", uri)
-        return
-    end
-
-    if type == "callback" then
-        local callback_credentials = get_header_value(callback_credentials_header)
-        return request_callback(bakend_url, callback_url, callback_credentials, resp_body, content_type, status_code)
-    else 
-        return request_timeout(backend_url, timeout_ms, resp_body, content_type, status_code)
-    end
-end
-
-local function get_header_value(headerName)
-  return ngx.req.get_headers()[headerName]
-end
-
---[[
-透传请求，并设置超时时间（ms），如果超时，则直接返回设定的code和body
-backend_url：上游服务地址
-timeout_ms：超时毫秒数
-resp_body： 超时返回的body内容
-content_type: 超时返回的body的类型，默认：application/json; charset=utf-8
-status_code：超时返回的http状态码，默认：200
-]]
-local function request_timeout(backend_url, timeout_ms, resp_body, content_type, status_code)
-  content_type = content_type or "application/json; charset=utf-8"
-  status_code = status_code or 200
-  
-  local httpc = http.new()
-  httpc:set_timeout(timeout_ms)
-  
-  local req_method = ngx.req.get_method()
-  local req_headers = ngx.req.get_headers()
-  
-  -- 修改请求头
-  req_headers["Connection"] = nil
-  req_headers["Host"] = ngx.var.host .. ':' .. ngx.var.server_port
-  req_headers["X-Real-IP"] = ngx.var.remote_addr
-  req_headers["X-Real-PORT"] = ngx.var.remote_port
-
-  local x_forwarded_for = req_headers["X-Forwarded-For"]
-  if x_forwarded_for then
-      x_forwarded_for = x_forwarded_for .. ", " .. ngx.var.remote_addr
-  else
-      x_forwarded_for = ngx.var.remote_addr
-  end
-  req_headers["X-Forwarded-For"] = x_forwarded_for
-  
-  ngx.req.read_body()
-
-  -- 构建后端请求 URL
-  local pass_url = backend_url:gsub("/+$", "") .. ngx.var.uri
-  if ngx.var.query_string then
-      pass_url = pass_url .. "?" .. ngx.var.query_string
-  end
-
-  -- 向后端服务器发送请求
-  local res, err = httpc:request_uri(pass_url, {
-      method = req_method,
-      headers = req_headers,
-      body = ngx.req.get_body_data(),
-      keepalive_timeout = 60,
-      keepalive_pool = 10
-  })
-
-  -- 检查响应，如果失败则处理超时和其他错误
-  if not res then
-      if err == "timeout" then
-          -- 超时情况返回自定义的响应
-          ngx.status = status_code
-          ngx.header["Content-Type"] = content_type
-          ngx.say(resp_body)
-          ngx.log(ngx.WARN, "Request to [", backend_url, "] timed out. Params: ", ngx.req.get_body_data())
-          return ngx.exit(status_code)
-      else
-          -- 其他错误按原样返回错误信息
-          ngx.status = ngx.HTTP_INTERNAL_SERVER_ERROR
-          ngx.header["Content-Type"] = "application/json; charset=utf-8"
-          ngx.say(cjson.encode({ error = "Failed to connect to backend", detail = err }))
-          ngx.log(ngx.ERR, "Request to [", backend_url, "] failed: ", err)
-          return ngx.exit(ngx.status)
-      end
-  end
-
-  -- 设置返回状态码
-  ngx.status = res.status
-
-  -- 移除特定响应头
-  res.headers["Transfer-Encoding"] = nil
-  res.headers["Connection"] = nil
-
-  for k, v in pairs(res.headers) do
-      ngx.header[k] = v
-  end
-
-  -- 返回响应体内容
-  ngx.say(res.body)
-  return ngx.exit(res.status)
-end
-
--- 异步透传请求，并在完成后回调
-local function async_request_and_callback(backend_url, request_uri, callback_url, callback_credentials, req_method, req_headers, req_body)
-    local httpc = http.new()
+local function _parse_url(url)
+    local parsed = {}
+    parsed.scheme, parsed.host, parsed.port, parsed.path, parsed.query, parsed.fragment =
+        url:match("^(https?)://([^:/]+):?(%d*)(/[^?#]*)?%??([^#]*)#?(.*)")
     
-    -- 向后端服务器发送请求
-    local res, err = httpc:request_uri(backend_url, {
-        method = req_method,
-        headers = req_headers,
-        body = req_body,
-        keepalive_timeout = 60,
-        keepalive_pool = 10
-    })
-    
-    if not res then
-        ngx.log(ngx.ERR, "Failed to request backend: ", err)
-        return
+    -- 默认路径为 "/"
+    if not parsed.path or parsed.path == "" then
+        parsed.path = "/"
     end
 
-    -- 准备向回调 URL 发送请求的数据
-    local callback_httpc = http.new()
-    local callback_body = cjson.encode({
-        request = request_uri,
-        credentials = callback_credentials,
-        status = res.status,
-        headers = res.headers,
-        body = res.body
-    })
+    -- 默认端口号
+    parsed.port = tonumber(parsed.port) or (parsed.scheme == "https" and 443 or 80)
 
-    -- 向 callback_url 发起请求，传递后端的响应内容
-    local callback_res, callback_err = callback_httpc:request_uri(callback_url, {
-        method = "POST",
-        body = callback_body,
-        headers = {
-            ["Content-Type"] = "application/json; charset=utf-8",
-            ["Content-Length"] = #callback_body
-        }
-    })
-
-    if not callback_res then
-        ngx.log(ngx.ERR, "Failed to send callback to ", callback_url, ": ", callback_err)
+    if parsed.port == "" then
+        parsed.port = (parsed.scheme == "https" and 443 or 80)
     else
-        ngx.log(ngx.INFO, "Callback to ", callback_url, " succeeded with status ", callback_res.status)
+        parsed.port = tonumber(parsed.port)
     end
+
+    return parsed
 end
 
--- 主方法，处理客户端请求并异步透传至后端
-local function request_callback(backend_url, callback_url, callback_credentials, resp_body, content_type, status_code)
-    content_type = content_type or "application/json; charset=utf-8"
-    status_code = status_code or 200
-
-    -- 获取请求方法、头信息、请求体
-    local req_method = ngx.req.get_method()
+local function _proxy_request_headers()
     local req_headers = ngx.req.get_headers()
-    req_headers["Connection"] = nil
+    req_headers["Connection"] = "Keep-Alive"
     req_headers["Host"] = ngx.var.host .. ':' .. ngx.var.server_port
     req_headers["X-Real-IP"] = ngx.var.remote_addr
     req_headers["X-Real-PORT"] = ngx.var.remote_port
@@ -763,12 +594,333 @@ local function request_callback(backend_url, callback_url, callback_credentials,
         x_forwarded_for = ngx.var.remote_addr
     end
     req_headers["X-Forwarded-For"] = x_forwarded_for
+    return req_headers
+end
+
+local function _read_request_body()
+    -- 确保请求体已被读取
+    ngx.req.read_body()
+
+    -- 获取 body 数据
+    local body_data = ngx.req.get_body_data()
+    if body_data then
+        return body_data
+    end
+
+    -- 如果 body 数据过大，可能被写入临时文件
+    local body_file = ngx.req.get_body_file()
+    if body_file then
+        local file, err = io.open(body_file, "r")
+        if not file then
+            ngx.log(ngx.ERR, "Failed to open body file: ", err)
+            return nil, "Failed to read body file"
+        end
+
+        local body = file:read("*a")
+        file:close()
+        return body
+    end
+
+    -- 如果既没有 body 数据，也没有临时文件，返回空值
+    return ""
+end
+
+
+local function _async_http_request(url, method, headers, body, timeout)
+    ngx.log(ngx.INFO, "[ASYNC REQUEST] URL: ", url, ", Method: ", method, ", Headers: ", cjson.encode(headers))
+
+    local httpc = http.new()
+    httpc:set_timeout(timeout > 0 and timeout or _M._Http_Timeout)
+
+    local parsed_url = _parse_url(url)
+    local scheme, host, port, path = parsed_url.scheme, parsed_url.host, parsed_url.port, parsed_url.path
+
+    -- Connect
+    local ok, err = httpc:connect(host, port)
+    if not ok then
+        return nil, "Failed to connect: " .. err
+    end
+
+    -- SSL handshake
+    if scheme == "https" then
+        local session, ssl_err = httpc:ssl_handshake(nil, host, false)
+        if not session then
+            return nil, "SSL handshake failed: " .. ssl_err
+        end
+    end
+
+    -- Make request
+    local res, req_err = httpc:request({
+        path = path,
+        method = method or "GET",
+        headers = headers,
+        body = body,
+    })
+
+    if not res then
+        httpc:close()
+        return nil, req_err
+    end
+
+    -- Read response body
+    local body, read_err = res:read_body()
+    if not read_err then
+        return nil, read_err
+    end
+
+    -- Set keepalive
+    local keepalive_ok, keepalive_err = httpc:set_keepalive(_M._Http_Keepalive, _M._Http_Pool_Size)
+    if not keepalive_ok then
+        ngx.log(ngx.ERR, "Failed to set keepalive: ", keepalive_err)
+    end
+
+    -- Return response
+    return {
+        status = res.status,
+        headers = res.headers or {},
+        body = body or "",
+    }, nil
+end
+
+local function _parse_request_params(req_method, body_data)
+    if req_method == "GET" then
+        return ngx.req.get_uri_args()
+    elseif req_method == "POST" then
+        local content_type = ngx.var.content_type or ""
+        if content_type:find("application/json") and body_data then
+            local ok, json_params = pcall(cjson.decode, body_data)
+            if ok then
+                return json_params
+            else
+                ngx.log(ngx.ERR, "Failed to decode JSON: ", json_params)
+                return nil
+            end
+        elseif content_type:find("application/x-www-form-urlencoded") then
+            return ngx.req.get_post_args()
+        end
+    end
+    return nil
+end
+
+local function _is_nil_or_empty(value)
+    -- 检查是否为 nil
+    if value == nil then
+        return true
+    end
+
+    -- 检查是否为空表或空数组
+    if type(value) == "table" then
+        -- `next` 返回 nil 表示表是空的（无键值对）
+        if next(value) == nil then
+            return true
+        end
+
+        -- 如果是数组，检查数组长度是否为 0
+        local is_array = true
+        for k, _ in pairs(value) do
+            if type(k) ~= "number" then
+                is_array = false
+                break
+            end
+        end
+
+        if is_array and #value == 0 then
+            return true
+        end
+    end
+
+    return false
+end
+
+function _M.set_http_timeout(timeout)
+    if type(timeout) == "number" and timeout > 0 then
+        _M._Http_Timeout = timeout
+    end
+end
+
+function _M.set_http_keepalive(timeout, pool_size)
+    if type(timeout) == "number" and timeout > 0 then
+        _M._Http_Keepalive = timeout
+    end
+
+    if type(pool_size) == "number" and pool_size > 0 then
+        _M._Http_Pool_Size = pool_size
+    end
+end
+
+-- 从指定路径加载路由规则，并缓存在全局变量
+function _M.load_rules(toml_path)
+    if _M._Routers_Loaded then
+        return
+    end
+    _M._Routers_Loaded = true
+
+    local config_file = io.open(toml_path, "r")
+    if not config_file then
+        ngx.log(ngx.ERR, "Failed to open config file " .. toml_path)
+        return
+    end
+
+    local config_content = config_file:read("*a")
+    config_file:close()
+
+    _M._Routers = parse_toml(config_content)
+end
+
+--[[
+1. 根据uri查找路由规则
+2. 如果未找到，则直接返回
+3. 如果找到，则根据规则类型进行处理
+4. type=="timeout", 则调用request_timeout，执行超时降级处理
+5. type=="callback", 则调用request_callback，执行同步变异步处理
+]]
+function _M.proxy_pass(uri)
+    local req_time = ngx.now()
+    local route = _M._Routers[uri]
+    if not route then
+        ngx.log(ngx.ERR, "[PROXYPASS] ", uri)
+        return
+    end
+    local type = route["type"]
+    local backend_url = route["backend_url"] or ""
+    local callback_url = route["callback_url"] or ""
+    local callback_credentials_header = route["callback_credentials_header"] or "X-Callback-Credentials"
+    local timeout_ms = route["timeout_ms"] or 500
+    local resp_body = route["resp_body"] or ""
+    local content_type = route["content_type"] or "application/json; charset=utf-8"
+    local status_code = route["status_code"] or 200
+
+    if backend_url == "" then
+        ngx.log(ngx.ERR, "No backend URL specified for route ", uri)
+        return
+    end
+
+    if type == "callback" and callback_url == "" then
+        ngx.log(ngx.ERR, "No callback URL specified for route ", uri)
+        return
+    end
+
+    if type == "callback" then
+        local callback_credentials = ngx.req.get_headers()[callback_credentials_header]
+        return request_callback(req_time, backend_url, callback_url, callback_credentials, resp_body, content_type, status_code)
+    else 
+        return request_timeout(backend_url, timeout_ms, resp_body, content_type, status_code)
+    end
+end
+
+-- 超时降级处理
+local function request_timeout(backend_url, timeout_ms, resp_body, content_type, status_code)
+    content_type = content_type or "application/json; charset=utf-8"
+    status_code = status_code or 200
+
+    local req_uri = ngx.var.uri
+    local req_method = ngx.req.get_method()
+    local req_headers = _proxy_request_headers()
+    local req_body = _read_request_body()
+
+    -- 构建后端请求 URL
+    local pass_url = backend_url:gsub("/+$", "") .. req_uri
+    if ngx.var.query_string then
+        pass_url = pass_url .. "?" .. ngx.var.query_string
+    end
+
+    ngx.log(ngx.INFO, "pass timeout request: ", req_uri, " to pass_url: ", pass_url, " for timeout: ", timeout_ms, "ms")
+
+    -- 向后端服务器发送请求
+    local res, err = _async_http_request(pass_url, req_method, req_headers, req_body, timeout_ms)
+
+    if not res then
+        if err == "timeout" then
+            -- 超时情况返回自定义的响应
+            ngx.status = status_code
+            ngx.header["Content-Type"] = content_type
+            ngx.say(resp_body)
+            ngx.log(ngx.INFO, "[TIMEOUT] ", "req_uri: " + req_uri + ", pass_url: " + pass_url + ", timeout: " + timeout_ms)
+            return ngx.exit(status_code)
+        else
+            -- 其他错误按原样返回错误信息
+            ngx.status = ngx.HTTP_INTERNAL_SERVER_ERROR
+            ngx.header["Content-Type"] = "application/json; charset=utf-8"
+            ngx.say(cjson.encode({ error = "Failed to connect to backend", detail = err }))
+            ngx.log(ngx.ERR, "Request to [", backend_url, "] failed: ", err)
+            return ngx.exit(ngx.status)
+        end
+    else
+        -- 返回后端服务器的响应
+        ngx.status = res.status
+        for k, v in pairs(res.headers) do
+            ngx.header[k] = v
+        end
+        ngx.say(res.body)
+        return ngx.exit(res.status)
+    end
+end
+
+-- 异步透传请求，并在完成后回调
+local function async_request_and_callback(backend_url, request_time, request_uri, request_params, callback_url, callback_credentials, req_method, req_headers, req_body)
+    ngx.log(ngx.INFO, "pass callback request ", request_uri, " to ", backend_url)
+
+    -- 向后端服务器发送请求
+    local res, err = _async_http_request(backend_url, req_method, req_headers, req_body, _M._Http_Timeout)
+    if not res then
+        ngx.log(ngx.ERR, "async http reuest to ", backend_url, " failed: " err)
+        res = {
+            status = ngx.HTTP_BAD_GATEWAY,
+            headers = {
+                ["Content-Type"] = "text/plain; charset=utf-8"
+            },
+            body = err
+        }
+    end
+
+    local res_status = res and res.status
+    local res_body = res and res.body or ""
+    local res_headers = res and res.headers or {}
+
+    -- 准备向回调 URL 发送请求的数据
+    local ok, callback_body = pcall(cjson.encode, {
+        request_time = request_time,
+        request_uri = request_uri,
+        request_params = request_params or {},
+        request_body = _is_nil_or_empty(req_params) and req_body or "",
+        callback_credentials = callback_credentials or "",
+        response_time = ngx.now(),
+        response_status_code = res_status,
+        response_http_headers = res_headers,
+        response_body = res_body
+    })
+    if not ok then
+        ngx.log(ngx.ERR, "Failed to encode callback body: ", callback_body)
+        return
+    end
+
+    -- 向 callback_url 发起请求，传递后端的响应内容
+    res, err = _async_http_request(callback_url, "POST", {
+        ["Content-Type"] = "application/json; charset=utf-8",
+        ["Content-Length"] = #callback_body
+    }, callback_body, _M._Http_Timeout)
+
+    if not res then
+        ngx.log(ngx.ERR, "[CALLBACK] req_uri: ", request_uri, ", callback: ", callback_url, ", error: ", err)
+    else
+        ngx.log(ngx.INFO, "[CALLBACK] req_uri: ", request_uri, ", callback: ", callback_url, ", status: ", res.status)
+    end
+end
+
+-- 同步变异步
+local function request_callback(req_time, backend_url, callback_url, callback_credentials, resp_body, content_type, status_code)
+    -- 获取请求方法、头信息、请求体
+    local req_uri = ngx.var.uri
+    local req_method = ngx.req.get_method()
+    local req_headers = _proxy_request_headers()
 
     ngx.req.read_body()
     local req_body = ngx.req.get_body_data()
 
+    local req_params = _parse_request_params(req_method, req_body)
+
     -- 构建后端请求 URL
-    local pass_url = backend_url:gsub("/+$", "") .. ngx.var.uri
+    local pass_url = backend_url:gsub("/+$", "") .. req_uri
     if ngx.var.query_string then
         pass_url = pass_url .. "?" .. ngx.var.query_string
     end
@@ -780,10 +932,18 @@ local function request_callback(backend_url, callback_url, callback_credentials,
     ngx.flush()  -- 刷新输出缓冲区，将响应立即返回给客户端
 
     -- 异步调用透传请求，并在收到响应后回调
-    local ok, err = ngx.timer.at(0, function()
-        async_request_and_callback(pass_url, ngx.var.uri, callback_url, callback_credentials, req_method, req_headers, req_body)
-    end)
-
+    local ok, err = ngx.timer.at(0, function(premature, ...)
+        if premature then
+            ngx.log(ngx.ERR, "Timer prematurely expired")
+            return
+        end
+    
+        local status, err = pcall(async_request_and_callback, ...)
+        if not status then
+            ngx.log(ngx.ERR, "Async callback failed: ", err)
+        end
+    end, pass_url, req_time, req_uri, req_params, callback_url, callback_credentials, req_method, req_headers, req_body)
+    
     if not ok then
         ngx.log(ngx.ERR, "Failed to create timer: ", err)
     end
