@@ -14,6 +14,9 @@ yum-config-manager --add-repo https://openresty.org/package/centos/openresty2.re
 yum install -y openresty
 yum install -y openresty-opm openresty-resty
 
+# lua-resty-downgrade call zlib by ffi
+yum install zlib-devel
+
 opm get sssxyd/lua-resty-downgrade
 
 systemctl enable openresty
