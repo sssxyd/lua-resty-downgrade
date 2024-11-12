@@ -135,4 +135,4 @@ server {
 | load_rules(toml_path) | 是 | 从 toml_path 指定的路径加载路由配置文件，本方法有缓存，只加载一次 |
 | proxy_pass(uri) | 是 | 根据uri从路由配置文件中找到对应的规则，并执行，如果找不到则直接返回 |
 | set_http_timeout(timeout) | 否 | 设置网关创建的http请求的timeout时间（单位毫秒），默认60000毫秒|
-| set_http_keepalive(timeout, pool_size) | 否 | 设置网关创建的http请求keepalive的timeout时间（单位毫秒）和连接池大小，默认60000毫秒，连接池最大25个连接|
+| set_http_keepalive(timeout, pool_size) | 否 | 设置网关创建的http请求keepalive的timeout时间（单位毫秒）和连接池大小，默认60000毫秒，连接池最大15个连接|

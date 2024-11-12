@@ -1,42 +1,28 @@
-[api.store_settings_packages_getPageData]
+['guest.common.erp.getMedicineInfoListForErp']
 type = "timeout"
-backend_url = "http://127.0.0.1:8080"
-timeout_ms = 250
+backend_url = "http://127.0.0.1:18080"
+timeout_ms = 90
 #status_code = 200
 #content_type = "application/json; charset=utf-8"
 resp_body = '''
 {
-    "code": 0,
-    "msg": "success",
-    "result": {
-        "total": 1,
-        "data": [
-            {
-                "id": 1,
-                "name": "test",
-                "description": "test",
-                "status": 1,
-                "createTime": 1600000000,
-                "updateTime": 1600000000
-            }
-        ]
-    }
+    "code": 10,
+    "msg": "time out downgraded",
+    "result": []
 }
 '''
 
-[api.store_sell_order_sendGetTrafficnoForST]
+['guest.st_api.getStoreInfo']
 type = "callback"
-backend_url = "http://127.0.0.1:8080"
-callback_url = "http://192.168.1.1:18080/handle_callback"
+backend_url = "http://127.0.0.1:18080"
+callback_url = "http://192.168.1.1:8281/handle_callback"
 #callback_credentials_header = "X-Callback-Credentials"
-#content_type = "application/json; charset=utf-8"
 #status_code = 200
+#content_type = "application/json; charset=utf-8"
 resp_body = '''
 {
-    "code": 0,
-    "msg": "success",
-    "result": {
-        "trafficno": "test"
-    }
+    "code": 11,
+    "msg": "callback downgraded",
+    "result": ""
 }
 '''

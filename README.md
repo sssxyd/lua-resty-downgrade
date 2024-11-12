@@ -135,4 +135,4 @@ server {
 | load_rules(toml_path) | Yes | Loads routing configuration from the specified toml_path. This method uses caching and will only load once. |
 | proxy_pass(uri) | Yes | Finds the corresponding rule for the URI from the routing configuration and executes it. If no rule is found, the request passes through directly. |
 | set_http_timeout(timeout) | No | Sets the timeout duration (in milliseconds) for HTTP requests created by the gateway. Default is 60,000 milliseconds. |
-| set_http_keepalive(timeout, pool_size) | No | Sets the keepalive timeout duration (in milliseconds) and connection pool size for HTTP requests created by the gateway. Defaults are 60,000 milliseconds and a maximum of 25 connections. |
+| set_http_keepalive(timeout, pool_size) | No | Sets the keepalive timeout duration (in milliseconds) and connection pool size for HTTP requests created by the gateway. Defaults are 60,000 milliseconds and a maximum of 15 connections. |

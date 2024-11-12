@@ -1,14 +1,82 @@
 local _M = {
-  _VERSION = '0.1.2',
+  _VERSION = '0.1.3',
   _Http_Timeout = 60000,
   _Http_Keepalive = 60000,
-  _Http_Pool_Size = 25,
+  _Http_Pool_Size = 15,
   _Routers = {},
   _Routers_Loaded = false,
 }
 
 local http = require("resty.http")
 local cjson = require("cjson")
+
+local ffi = require "ffi"
+
+ffi.cdef[[
+typedef struct {
+    const unsigned char *next_in;
+    unsigned int avail_in;
+    unsigned long total_in;
+    unsigned char *next_out;
+    unsigned int avail_out;
+    unsigned long total_out;
+    const char *msg;
+    void *state;
+    void *zalloc;
+    void *zfree;
+    void *opaque;
+    int data_type;
+    unsigned long adler;
+    unsigned long reserved;
+} z_stream;
+
+int inflateInit2_(z_stream *strm, int windowBits, const char *version, int stream_size);
+int inflate(z_stream *strm, int flush);
+int inflateEnd(z_stream *strm);
+]]
+
+local zlib = ffi.load("z")
+
+local function _decompress_gzip(data)
+    local buffer_size = 16384 -- 16KB buffer size
+    local zstream = ffi.new("z_stream")
+    local out_buffer = ffi.new("unsigned char[?]", buffer_size)
+
+    zstream.next_in = data
+    zstream.avail_in = #data
+    zstream.next_out = out_buffer
+    zstream.avail_out = buffer_size
+
+    local Z_OK = 0
+    local Z_STREAM_END = 1
+    local Z_FINISH = 4
+
+    local windowBits = 15 + 32 -- gzip and deflate decoding
+	local ret = zlib.inflateInit2_(zstream, windowBits, "1.2.11", ffi.sizeof("z_stream"))
+
+    if ret ~= Z_OK then
+        error("Failed to initialize zlib stream")
+    end
+
+    local output = {}
+    while true do
+        ret = zlib.inflate(zstream, Z_FINISH)
+        if ret == Z_STREAM_END then break end
+        if ret ~= Z_OK and ret ~= Z_STREAM_END then
+            zlib.inflateEnd(zstream)
+            error("Zlib inflate failed with error code: " .. ret)
+        end
+
+        -- Append decompressed data to output
+        table.insert(output, ffi.string(out_buffer, buffer_size - zstream.avail_out))
+        zstream.next_out = out_buffer
+        zstream.avail_out = buffer_size
+    end
+
+    zlib.inflateEnd(zstream)
+    table.insert(output, ffi.string(out_buffer, buffer_size - zstream.avail_out))
+    return table.concat(output)
+end
 
 
 local function _parse_toml(toml, options)
@@ -560,8 +628,9 @@ end
 
 local function _parse_url(url)
     local parsed = {}
+    -- 修正正则表达式，支持更通用的URL解析
     parsed.scheme, parsed.host, parsed.port, parsed.path, parsed.query, parsed.fragment =
-        url:match("^(https?)://([^:/]+):?(%d*)(/[^?#]*)?%??([^#]*)#?(.*)")
+        url:match("^(https?)://([^:/?#]+):?(%d*)([^?#]*)%??([^#]*)#?(.*)")
     
     -- 默认路径为 "/"
     if not parsed.path or parsed.path == "" then
@@ -570,12 +639,6 @@ local function _parse_url(url)
 
     -- 默认端口号
     parsed.port = tonumber(parsed.port) or (parsed.scheme == "https" and 443 or 80)
-
-    if parsed.port == "" then
-        parsed.port = (parsed.scheme == "https" and 443 or 80)
-    else
-        parsed.port = tonumber(parsed.port)
-    end
 
     return parsed
 end
@@ -625,21 +688,67 @@ local function _read_request_body()
     return ""
 end
 
+local function _decompress_resp_body(content_encoding, resp_body)
+	if content_encoding == "gzip" or content_encoding == "deflate" then
+		return _decompress_gzip(resp_body)
+	end
+	return resp_body
+end
+
+local function _read_response_body(res)
+    local body_reader = res.body_reader
+    local max_chunk_size = 8192 -- 每次读取的块大小，默认 8KB
+    local chunks = {}
+
+	local resp_body = ""
+    if body_reader then
+        -- 使用流式读取逐块读取响应体
+        repeat
+            local chunk, read_err = body_reader(max_chunk_size)
+            if chunk then
+                table.insert(chunks, chunk)
+            elseif read_err then
+                return ""
+            end
+        until not chunk
+
+        -- 合并所有块为完整的响应体
+        resp_body = table.concat(chunks)
+    elseif res.body then
+        -- 如果流式读取不可用，直接读取响应体
+        resp_body = res.body or ""
+    else
+        -- 如果没有响应体可用，返回空字符串
+        resp_body = ""
+    end
+
+	if resp_body == "" then
+		return ""
+	end
+
+	return resp_body
+end
 
 local function _async_http_request(url, method, headers, body, timeout)
-    ngx.log(ngx.INFO, "[ASYNC REQUEST] URL: ", url, ", Method: ", method, ", Headers: ", cjson.encode(headers))
+    -- ngx.log(ngx.INFO, "[ASYNC REQUEST] URL: ", url, ", Method: ", method, ", Headers: ", cjson.encode(headers))
 
     local httpc = http.new()
     httpc:set_timeout(timeout > 0 and timeout or _M._Http_Timeout)
 
     local parsed_url = _parse_url(url)
-    local scheme, host, port, path = parsed_url.scheme, parsed_url.host, parsed_url.port, parsed_url.path
+    local scheme, host, port, path, query, fragment = parsed_url.scheme, parsed_url.host, parsed_url.port, parsed_url.path, parsed_url.query, parsed_url.fragment
 
     -- Connect
     local ok, err = httpc:connect(host, port)
     if not ok then
         return nil, "Failed to connect: " .. err
     end
+
+	-- 如果请求头中包含 Accept-Encoding，则修正为 gzip, deflate，因为本程序只能解析这两种压缩格式
+	if headers["Accept-Encoding"] ~= nil then
+		headers["Accept-Encoding"] = nil
+		headers["Accept-Encoding"] = "gzip, deflate"
+	end
 
     -- SSL handshake
     if scheme == "https" then
@@ -653,6 +762,8 @@ local function _async_http_request(url, method, headers, body, timeout)
     local res, req_err = httpc:request({
         path = path,
         method = method or "GET",
+		query = query,
+		fragment = fragment,
         headers = headers,
         body = body,
     })
@@ -663,10 +774,7 @@ local function _async_http_request(url, method, headers, body, timeout)
     end
 
     -- Read response body
-    local body, read_err = res:read_body()
-    if not read_err then
-        return nil, read_err
-    end
+    local resp_body = _read_response_body(res)
 
     -- Set keepalive
     local keepalive_ok, keepalive_err = httpc:set_keepalive(_M._Http_Keepalive, _M._Http_Pool_Size)
@@ -674,11 +782,17 @@ local function _async_http_request(url, method, headers, body, timeout)
         ngx.log(ngx.ERR, "Failed to set keepalive: ", keepalive_err)
     end
 
+	-- 将 res.headers 转换为普通的 Lua 表
+	local resp_headers = {}
+	for k, v in pairs(res.headers) do
+		resp_headers[string.lower(k)] = v
+	end
+
     -- Return response
     return {
         status = res.status,
-        headers = res.headers or {},
-        body = body or "",
+        headers = resp_headers,
+        body = resp_body,
     }, nil
 end
 
@@ -687,6 +801,7 @@ local function _parse_request_params(req_method, body_data)
         return ngx.req.get_uri_args()
     elseif req_method == "POST" then
         local content_type = ngx.var.content_type or ""
+		content_type = string.lower(content_type)
         if content_type:find("application/json") and body_data then
             local ok, json_params = pcall(cjson.decode, body_data)
             if ok then
@@ -695,7 +810,7 @@ local function _parse_request_params(req_method, body_data)
                 ngx.log(ngx.ERR, "Failed to decode JSON: ", json_params)
                 return nil
             end
-        elseif content_type:find("application/x-www-form-urlencoded") then
+        elseif content_type:find("application/x%-www%-form%-urlencoded") then
             return ngx.req.get_post_args()
         end
     end
@@ -732,6 +847,7 @@ local function _is_nil_or_empty(value)
     return false
 end
 
+
 function _M.set_http_timeout(timeout)
     if type(timeout) == "number" and timeout > 0 then
         _M._Http_Timeout = timeout
@@ -764,48 +880,15 @@ function _M.load_rules(toml_path)
     local config_content = config_file:read("*a")
     config_file:close()
 
-    _M._Routers = parse_toml(config_content)
-end
-
---[[
-1. 根据uri查找路由规则
-2. 如果未找到，则直接返回
-3. 如果找到，则根据规则类型进行处理
-4. type=="timeout", 则调用request_timeout，执行超时降级处理
-5. type=="callback", 则调用request_callback，执行同步变异步处理
-]]
-function _M.proxy_pass(uri)
-    local req_time = ngx.now()
-    local route = _M._Routers[uri]
-    if not route then
-        ngx.log(ngx.ERR, "[PROXYPASS] ", uri)
-        return
-    end
-    local type = route["type"]
-    local backend_url = route["backend_url"] or ""
-    local callback_url = route["callback_url"] or ""
-    local callback_credentials_header = route["callback_credentials_header"] or "X-Callback-Credentials"
-    local timeout_ms = route["timeout_ms"] or 500
-    local resp_body = route["resp_body"] or ""
-    local content_type = route["content_type"] or "application/json; charset=utf-8"
-    local status_code = route["status_code"] or 200
-
-    if backend_url == "" then
-        ngx.log(ngx.ERR, "No backend URL specified for route ", uri)
-        return
-    end
-
-    if type == "callback" and callback_url == "" then
-        ngx.log(ngx.ERR, "No callback URL specified for route ", uri)
-        return
-    end
-
-    if type == "callback" then
-        local callback_credentials = ngx.req.get_headers()[callback_credentials_header]
-        return request_callback(req_time, backend_url, callback_url, callback_credentials, resp_body, content_type, status_code)
-    else 
-        return request_timeout(backend_url, timeout_ms, resp_body, content_type, status_code)
-    end
+	-- ngx.log(ngx.INFO, "rules: ", config_content)
+	local rules = _parse_toml(config_content)
+	local apis = ""
+	for api, rule in pairs(rules) do
+		apis = apis .. api .. ":" .. rule["type"] .. ", "
+	end
+	ngx.log(ngx.ERR, ">>> Load Router Rules [", apis, "]")
+	
+    _M._Routers = rules
 end
 
 -- 超时降级处理
@@ -835,7 +918,7 @@ local function request_timeout(backend_url, timeout_ms, resp_body, content_type,
             ngx.status = status_code
             ngx.header["Content-Type"] = content_type
             ngx.say(resp_body)
-            ngx.log(ngx.INFO, "[TIMEOUT] ", "req_uri: " + req_uri + ", pass_url: " + pass_url + ", timeout: " + timeout_ms)
+            ngx.log(ngx.INFO, "[TIMEOUT] ", "req_uri: ", req_uri, ", pass_url: ", pass_url, ", timeout: ", timeout_ms)
             return ngx.exit(status_code)
         else
             -- 其他错误按原样返回错误信息
@@ -847,10 +930,13 @@ local function request_timeout(backend_url, timeout_ms, resp_body, content_type,
         end
     else
         -- 返回后端服务器的响应
+		ngx.log(ngx.INFO, ">>>>status: ", res.status)
         ngx.status = res.status
         for k, v in pairs(res.headers) do
+			ngx.log(ngx.INFO, ">>>>header: ", k, ":", v)
             ngx.header[k] = v
         end
+		ngx.log(ngx.INFO, ">>>>body: ", res.body)
         ngx.say(res.body)
         return ngx.exit(res.status)
     end
@@ -873,26 +959,27 @@ local function async_request_and_callback(backend_url, request_time, request_uri
         }
     end
 
-    local res_status = res and res.status
-    local res_body = res and res.body or ""
-    local res_headers = res and res.headers or {}
+    local res_body = _decompress_resp_body(res.headers["content-encoding"], res.body)
 
     -- 准备向回调 URL 发送请求的数据
-    local ok, callback_body = pcall(cjson.encode, {
+	local resp_data = {
         request_time = request_time,
         request_uri = request_uri,
         request_params = request_params or {},
-        request_body = _is_nil_or_empty(req_params) and req_body or "",
+        request_body = _is_nil_or_empty(request_params) and req_body or "",
         callback_credentials = callback_credentials or "",
         response_time = ngx.now(),
-        response_status_code = res_status,
-        response_http_headers = res_headers,
+        response_status_code = res.status,
+        response_http_headers = res.headers,
         response_body = res_body
-    })
+    }
+    local ok, callback_body = pcall(cjson.encode, resp_data)
     if not ok then
         ngx.log(ngx.ERR, "Failed to encode callback body: ", callback_body)
         return
     end
+
+	ngx.log(ngx.INFO, "callback body: ", callback_body)
 
     -- 向 callback_url 发起请求，传递后端的响应内容
     res, err = _async_http_request(callback_url, "POST", {
@@ -949,6 +1036,47 @@ local function request_callback(req_time, backend_url, callback_url, callback_cr
     end
 
     return ngx.exit(status_code)
+end
+
+--[[
+1. 根据uri查找路由规则
+2. 如果未找到，则直接返回
+3. 如果找到，则根据规则类型进行处理
+4. type=="timeout", 则调用request_timeout，执行超时降级处理
+5. type=="callback", 则调用request_callback，执行同步变异步处理
+]]
+function _M.proxy_pass(uri)
+    local req_time = ngx.now()
+    local route = _M._Routers[uri]
+    if not route then
+        ngx.log(ngx.ERR, "[PROXYPASS] ", uri)
+        return
+    end
+    local type = route["type"]
+    local backend_url = route["backend_url"] or ""
+    local callback_url = route["callback_url"] or ""
+    local callback_credentials_header = route["callback_credentials_header"] or "X-Callback-Credentials"
+    local timeout_ms = route["timeout_ms"] or 500
+    local resp_body = route["resp_body"] or ""
+    local content_type = route["content_type"] or "application/json; charset=utf-8"
+    local status_code = route["status_code"] or 200
+
+    if backend_url == "" then
+        ngx.log(ngx.ERR, "No backend URL specified for route ", uri)
+        return
+    end
+
+    if type == "callback" and callback_url == "" then
+        ngx.log(ngx.ERR, "No callback URL specified for route ", uri)
+        return
+    end
+
+    if type == "callback" then
+        local callback_credentials = ngx.req.get_headers()[callback_credentials_header]
+        return request_callback(req_time, backend_url, callback_url, callback_credentials, resp_body, content_type, status_code)
+    else 
+        return request_timeout(backend_url, timeout_ms, resp_body, content_type, status_code)
+    end
 end
 
 return _M
