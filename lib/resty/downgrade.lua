@@ -1,5 +1,5 @@
 local _M = {
-  _VERSION = '0.1.3',
+  _VERSION = '0.1.4',
   _Http_Timeout = 60000,
   _Http_Keepalive = 60000,
   _Http_Pool_Size = 15,
@@ -9,8 +9,7 @@ local _M = {
 
 local http = require("resty.http")
 local cjson = require("cjson")
-
-local ffi = require "ffi"
+local ffi = require("ffi")
 
 ffi.cdef[[
 typedef struct {
@@ -643,6 +642,14 @@ local function _parse_url(url)
     return parsed
 end
 
+local function _is_valid_http_url(url)
+    -- 定义简单的 HTTP/HTTPS URL 正则表达式
+    local pattern = "^https?://[%w-_%.%?%.:/%+=&]+$"
+
+    -- 使用 string.match 检查 URL 是否匹配
+    return url:match(pattern) ~= nil
+end
+
 local function _proxy_request_headers()
     local req_headers = ngx.req.get_headers()
     req_headers["Connection"] = "Keep-Alive"
@@ -823,6 +830,16 @@ local function _is_nil_or_empty(value)
         return true
     end
 
+	-- 检查是否为空字符串
+	if type(value) == "string" and value == "" then
+		return true
+	end
+
+    -- 检查是否为数字 0
+    if type(value) == "number" and value == 0 then
+        return true
+    end	
+
     -- 检查是否为空表或空数组
     if type(value) == "table" then
         -- `next` 返回 nil 表示表是空的（无键值对）
@@ -975,11 +992,14 @@ local function async_request_and_callback(backend_url, request_time, request_uri
     }
     local ok, callback_body = pcall(cjson.encode, resp_data)
     if not ok then
-        ngx.log(ngx.ERR, "Failed to encode callback body: ", callback_body)
+        ngx.log(ngx.ERR, "Failed to encode callback body: ", resp_data)
         return
     end
 
-	ngx.log(ngx.INFO, "callback body: ", callback_body)
+	if _is_nil_or_empty(callback_url) or not _is_valid_http_url(callback_url) then
+		ngx.log(ngx.ERR, "[CALLBACK_NO] req_uri: ", request_uri, ", no callback, response: ", callback_body, ", status: ", res.status)
+		return
+	end
 
     -- 向 callback_url 发起请求，传递后端的响应内容
     res, err = _async_http_request(callback_url, "POST", {
@@ -988,9 +1008,9 @@ local function async_request_and_callback(backend_url, request_time, request_uri
     }, callback_body, _M._Http_Timeout)
 
     if not res then
-        ngx.log(ngx.ERR, "[CALLBACK] req_uri: ", request_uri, ", callback: ", callback_url, ", error: ", err)
+        ngx.log(ngx.ERR, "[CALLBACK_ERR] req_uri: ", request_uri, ", callback: ", callback_url, ", error: ", err)
     else
-        ngx.log(ngx.INFO, "[CALLBACK] req_uri: ", request_uri, ", callback: ", callback_url, ", status: ", res.status)
+        ngx.log(ngx.INFO, "[CALLBACK_YES] req_uri: ", request_uri, ", callback: ", callback_url, ", status: ", res.status)
     end
 end
 
@@ -1052,29 +1072,32 @@ function _M.proxy_pass(uri)
         ngx.log(ngx.ERR, "[PROXYPASS] ", uri)
         return
     end
-    local type = route["type"]
-    local backend_url = route["backend_url"] or ""
-    local callback_url = route["callback_url"] or ""
+
+	local backend_url = route["backend_url"]
+	if _is_nil_or_empty(backend_url) or not _is_valid_http_url(backend_url) then
+		ngx.log(ngx.ERR, "[PROXYPASS] backend_url: [", backend_url, "] is empty or invalid")
+		return
+	end
+
+    local type = route["type"] or "timeout"
+	local callback_url_header = route["callback_url_header"] or "X-Callback-URL"
     local callback_credentials_header = route["callback_credentials_header"] or "X-Callback-Credentials"
+    local config_callback_url = route["callback_url"] or ""
     local timeout_ms = route["timeout_ms"] or 500
-    local resp_body = route["resp_body"] or ""
+    local resp_body = route["resp_body"] or "{}"
     local content_type = route["content_type"] or "application/json; charset=utf-8"
     local status_code = route["status_code"] or 200
 
-    if backend_url == "" then
-        ngx.log(ngx.ERR, "No backend URL specified for route ", uri)
-        return
-    end
-
-    if type == "callback" and callback_url == "" then
-        ngx.log(ngx.ERR, "No callback URL specified for route ", uri)
-        return
-    end
-
     if type == "callback" then
-        local callback_credentials = ngx.req.get_headers()[callback_credentials_header]
+		local req_headers = ngx.req.get_headers()
+		local callback_url = req_headers[callback_url_header]
+		if _is_nil_or_empty(callback_url) then
+			callback_url = config_callback_url
+		end
+
+        local callback_credentials = req_headers[callback_credentials_header]
         return request_callback(req_time, backend_url, callback_url, callback_credentials, resp_body, content_type, status_code)
-    else 
+    else
         return request_timeout(backend_url, timeout_ms, resp_body, content_type, status_code)
     end
 end

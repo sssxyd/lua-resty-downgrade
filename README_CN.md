@@ -28,31 +28,27 @@ systemctl enable openresty
 ["/thirdpart/user/getPageData"]
 # 当前路由的请求，适配超时服务降级模式
 type = "timeout"
+
 # 上游服务地址，支持https
 backend_url = "http://127.0.0.1:8080"
+
 # 超时时间，单位毫秒
 timeout_ms = 250
+
 # 超时服务降级触发后，返回的HTTP状态码，默认200
 #status_code = 200
+
 # 超时服务降级触发后，返回的ContentType，默认JSON
 #content_type = "application/json; charset=utf-8"
+
 # 超时服务降级触发后，返回的Body内容
 resp_body = '''
 {
-    "code": 0,
-    "msg": "success",
+    "code": 100,
+    "msg": "timeout downgrade",
     "result": {
-        "total": 1,
-        "data": [
-            {
-                "id": 1,
-                "name": "test",
-                "description": "test",
-                "status": 1,
-                "createTime": 1600000000,
-                "updateTime": 1600000000
-            }
-        ]
+        "total": 0,
+        "data": []
     }
 }
 '''
@@ -62,21 +58,29 @@ resp_body = '''
 type = "callback"
 # 上游服务地址，支持https
 backend_url = "http://127.0.0.1:8080"
-# 回调地址，向该接口 Post JSON格式的数据
-callback_url = "http://192.168.1.1:18080/handle_callback"
-# 当前请求中存储回调凭证的header名称，默认：X-Callback-Credentials，该header可以为空
+
+# 当前请求中存储回调地址的header名称，默认：X-Callback-Url，该header的值可以为空
+#callback_url_header = "X-Callback-Url"
+
+# 当前请求中存储回调凭证的header名称，默认：X-Callback-Credentials，该header的值可以为空
 #callback_credentials_header = "X-Callback-Credentials"
+
+# 回调地址，向该接口 Post JSON格式的数据, 优先从请求的header中获取回调地址，未设置则从此处获取回调地址，还是没有，则不回调
+callback_url = "http://192.168.1.1:8281/handle_callback"
+
 # 同步转异步触发后，立即返回的HTTP状态码，默认200
 #status_code = 200
+
 # 同步转异步触发后，立即返回的ContentType，默认JSON
 #content_type = "application/json; charset=utf-8"
+
 # 同步转异步触发后，立即返回的Body内容
 resp_body = '''
 {
-    "code": 0,
-    "msg": "success",
+    "code": 101,
+    "msg": "callback downgrade",
     "result": {
-        "trafficno": "test"
+        "trafficNo" : ""
     }
 }
 '''
@@ -87,7 +91,7 @@ resp_body = '''
 ```conf
 
 server {
-    listen 8888;
+    listen 8280;
     server_name _;
     root /usr/local/openresty/nginx/html;
     

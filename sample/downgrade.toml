@@ -1,4 +1,4 @@
-['guest.common.erp.getMedicineInfoListForErp']
+["guest.common.erp.getMedicineInfoListForErp"]
 type = "timeout"
 backend_url = "http://127.0.0.1:18080"
 timeout_ms = 90
@@ -12,11 +12,13 @@ resp_body = '''
 }
 '''
 
-['guest.st_api.getStoreInfo']
+["guest.st_api.getStoreInfo"]
 type = "callback"
 backend_url = "http://127.0.0.1:18080"
-callback_url = "http://192.168.1.1:8281/handle_callback"
+#callback_url_header = "X-Callback-Url"
 #callback_credentials_header = "X-Callback-Credentials"
+#优先从callback_url_header对应的header中获取回调地址，如果没有则使用此处配置的callback_url，如何还是没有则不回调
+callback_url = "http://192.168.1.1:8281/handle_callback"
 #status_code = 200
 #content_type = "application/json; charset=utf-8"
 resp_body = '''

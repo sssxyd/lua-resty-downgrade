@@ -28,31 +28,27 @@ systemctl enable openresty
 ["/thirdpart/user/getPageData"]
 # Requests for this route adapt to the timeout service degradation mode
 type = "timeout"
+
 # Upstream service address, supports https
 backend_url = "http://127.0.0.1:8080"
+
 # Timeout duration in milliseconds
 timeout_ms = 250
+
 # HTTP status code returned after timeout service degradation is triggered (default is 200)
 #status_code = 200
+
 # Content-Type returned after timeout service degradation is triggered (default is JSON)
 #content_type = "application/json; charset=utf-8"
+
 # Body content returned after timeout service degradation is triggered
 resp_body = '''
 {
     "code": 0,
     "msg": "success",
     "result": {
-        "total": 1,
-        "data": [
-            {
-                "id": 1,
-                "name": "test",
-                "description": "test",
-                "status": 1,
-                "createTime": 1600000000,
-                "updateTime": 1600000000
-            }
-        ]
+        "total": 0,
+        "data": []
     }
 }
 '''
@@ -60,16 +56,29 @@ resp_body = '''
 ["/thirdpart/traffic/getTrafficNo"]
 # Requests for this route adapt to the synchronous-to-asynchronous mode
 type = "callback"
+
 # Upstream service address, supports https
 backend_url = "http://127.0.0.1:8080"
-# Callback address, posts JSON formatted data to this API
-callback_url = "http://192.168.1.1:18080/handle_callback"
-# Name of the HTTP header containing the callback credentials, defaults to "X-Callback-Credentials". This header can be empty.
+
+# Header name in the current request that stores the callback URL, default: X-Callback-Url
+# The value of this header can be empty
+#callback_url_header = "X-Callback-Url"
+
+# Header name in the current request that stores the callback credentials, default: X-Callback-Credentials
+# The value of this header can be empty
 #callback_credentials_header = "X-Callback-Credentials"
+
+# Callback URL to which the service will POST JSON data
+# It first attempts to retrieve the callback URL from the request header, and if not set, falls back to this URL.
+# If neither is provided, no callback will be triggered.
+callback_url = "http://192.168.1.1:8281/handle_callback"
+
 # HTTP status code returned immediately after triggering synchronous-to-asynchronous mode (default is 200)
 #status_code = 200
+
 # Content-Type returned immediately after triggering synchronous-to-asynchronous mode (default is JSON)
 #content_type = "application/json; charset=utf-8"
+
 # Body content returned immediately after triggering synchronous-to-asynchronous mode
 resp_body = '''
 {
