@@ -1,5 +1,5 @@
 local _M = {
-  _VERSION = '0.1.4',
+  _VERSION = '0.1.5',
   _Http_Timeout = 60000,
   _Http_Keepalive = 60000,
   _Http_Pool_Size = 15,
@@ -668,6 +668,11 @@ local function _proxy_request_headers()
 end
 
 local function _read_request_body()
+    -- 检查是否已有缓存数据
+    if ngx.ctx.request_body_cache then
+        return ngx.ctx.request_body_cache
+    end
+
     -- 确保请求体已被读取
     ngx.req.read_body()
 
@@ -688,10 +693,14 @@ local function _read_request_body()
 
         local body = file:read("*a")
         file:close()
+
+        -- 缓存数据到 ngx.ctx
+        ngx.ctx.request_body_cache = body
         return body
     end
 
     -- 如果既没有 body 数据，也没有临时文件，返回空值
+    ngx.ctx.request_body_cache = ""
     return ""
 end
 
@@ -1100,6 +1109,14 @@ function _M.proxy_pass(uri)
     else
         return request_timeout(backend_url, timeout_ms, resp_body, content_type, status_code)
     end
+end
+
+function _M.request_params()
+	local req_method = ngx.req.get_method()
+	local req_body = _read_request_body()
+
+	local req_params = _parse_request_params(req_method, req_body)
+	return req_params
 end
 
 return _M
