@@ -1,5 +1,5 @@
 local _M = {
-  _VERSION = '0.1.5',
+  _VERSION = '0.1.6',
   _Http_Timeout = 60000,
   _Http_Keepalive = 60000,
   _Http_Pool_Size = 15,
@@ -653,7 +653,6 @@ end
 local function _proxy_request_headers()
     local req_headers = ngx.req.get_headers()
     req_headers["Connection"] = "Keep-Alive"
-    req_headers["Host"] = ngx.var.host .. ':' .. ngx.var.server_port
     req_headers["X-Real-IP"] = ngx.var.remote_addr
     req_headers["X-Real-PORT"] = ngx.var.remote_port
 
@@ -956,13 +955,10 @@ local function request_timeout(backend_url, timeout_ms, resp_body, content_type,
         end
     else
         -- 返回后端服务器的响应
-		ngx.log(ngx.INFO, ">>>>status: ", res.status)
         ngx.status = res.status
         for k, v in pairs(res.headers) do
-			ngx.log(ngx.INFO, ">>>>header: ", k, ":", v)
             ngx.header[k] = v
         end
-		ngx.log(ngx.INFO, ">>>>body: ", res.body)
         ngx.say(res.body)
         return ngx.exit(res.status)
     end
