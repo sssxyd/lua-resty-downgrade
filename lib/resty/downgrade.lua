@@ -115,7 +115,7 @@ local function _parse_toml(toml, options)
 		nl = nl .. table.concat(crlf)
 	end
 	nl = nl .. "]"
-	
+
 	-- stores text data
 	local buffer = ""
 
@@ -367,7 +367,7 @@ local function _parse_toml(toml, options)
 	end
 
 	local parseArray, getValue
-	
+
 	function parseArray()
 		step() -- skip [
 		skipWhitespace()
@@ -400,7 +400,7 @@ local function _parse_toml(toml, options)
 
 				array = array or {}
 				table.insert(array, v.value)
-				
+
 				if char() == "," then
 					step()
 				end
@@ -501,7 +501,7 @@ local function _parse_toml(toml, options)
 
 	-- track whether the current key was quoted or not
 	local quotedKey = false
-	
+
 	-- parse the document!
 	while(cursor <= toml:len()) do
 
@@ -519,7 +519,7 @@ local function _parse_toml(toml, options)
 		if char() == "=" then
 			step()
 			skipWhitespace()
-			
+
 			-- trim key name
 			buffer = trim(buffer)
 
@@ -653,7 +653,7 @@ local function _parse_url(url)
     -- 修正正则表达式，支持更通用的URL解析
     parsed.scheme, parsed.host, parsed.port, parsed.path, parsed.query, parsed.fragment =
         url:match("^(https?)://([^:/?#]+):?(%d*)([^?#]*)%??([^#]*)#?(.*)")
-    
+
     -- 默认路径为 "/"
     if not parsed.path or parsed.path == "" then
         parsed.path = "/"
@@ -935,7 +935,7 @@ function _M.load_rules(toml_path)
 		apis = apis .. api .. ":" .. rule["type"] .. ", "
 	end
 	ngx.log(ngx.ERR, ">>> Load Router Rules [", apis, "]")
-	
+
     _M._Routers = rules
 end
 
@@ -1072,7 +1072,7 @@ local function request_callback(req_time, backend_url, callback_url, callback_cr
             ngx.log(ngx.ERR, "Timer prematurely expired")
             return
         end
-    
+
         local status, err = pcall(async_request_and_callback, ...)
         if not status then
             ngx.log(ngx.ERR, "Async callback failed: ", err)
@@ -1133,7 +1133,7 @@ end
 function _M.request_params()
 	local req_method = ngx.req.get_method()
 	local req_body = _read_request_body()
-	
+
 	local req_params = _parse_request_params(req_method, req_body)
 	return req_params
 end
