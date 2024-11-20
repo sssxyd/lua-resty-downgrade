@@ -9,11 +9,13 @@ if not file then
     ngx.status = 500
     ngx.say("Failed to open log file: ", err)
     ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
+    return
 end
 
 -- 读取所有日志内容
 local lines = {}
-for line in file:lines() do
+local file_lines = file and file:lines() or {}
+for line in file_lines do
     -- 提取 Base64 内容 xxxx
     local base64_content = line:match("CALLBACK_JSON%[([^%]]+)%]")
     

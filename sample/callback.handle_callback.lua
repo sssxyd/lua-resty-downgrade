@@ -1,13 +1,12 @@
-local cjson = require "cjson"
 
 -- 读取请求体
 ngx.req.read_body()
 local body_data = ngx.req.get_body_data()
-
-if not body_data then
+if body_data == nil then
     ngx.status = 400
     ngx.say("No body received")
     ngx.exit(ngx.HTTP_BAD_REQUEST)
+    return
 end
 
 -- 将解析后的对象写入 Nginx 日志
