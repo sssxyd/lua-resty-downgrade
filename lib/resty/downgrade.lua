@@ -1,9 +1,10 @@
 local _M = {
-  _VERSION = '0.1.6',
+  _VERSION = '0.1.7',
   _Http_Timeout = 60000,
   _Http_Keepalive = 60000,
   _Http_Pool_Size = 15,
   _Routers = {},
+  _Router_Names = {},
   _Routers_Loaded = false,
 }
 
@@ -932,6 +933,7 @@ function _M.load_rules(toml_path)
 	local rules = _parse_toml(config_content)
 	local apis = ""
 	for api, rule in pairs(rules) do
+		table.insert(_M._Router_Names, api)
 		apis = apis .. api .. ":" .. rule["type"] .. ", "
 	end
 	ngx.log(ngx.ERR, ">>> Load Router Rules [", apis, "]")
@@ -1086,21 +1088,19 @@ local function request_callback(req_time, backend_url, callback_url, callback_cr
     return ngx.exit(status_code)
 end
 
---[[
-1. 根据uri查找路由规则
-2. 如果未找到，则直接返回
-3. 如果找到，则根据规则类型进行处理
-4. type=="timeout", 则调用request_timeout，执行超时降级处理
-5. type=="callback", 则调用request_callback，执行同步变异步处理
-]]
-function _M.proxy_pass(uri)
-    local req_time = ngx.now()
-    local route = _M._Routers[uri]
+---根据传入的路由规则名称，执行该路由规则定义的操作
+---@param route_name string 路由规则名称
+---@return nil	如果没有执行任何操作，则继续执行后续的请求处理，否则结束请求处理
+function _M.proxy_pass(route_name)
+	if route_name == nil or route_name == "" then
+		return
+	end
+	local route = _M._Routers[route_name]
     if not route then
-        ngx.log(ngx.ERR, "[PROXYPASS] ", uri)
         return
     end
 
+    local req_time = ngx.now()
 	local backend_url = route["backend_url"]
 	if _is_nil_or_empty(backend_url) or not _is_valid_http_url(backend_url) then
 		ngx.log(ngx.ERR, "[PROXYPASS] backend_url: [", backend_url, "] is empty or invalid")
@@ -1130,12 +1130,24 @@ function _M.proxy_pass(uri)
     end
 end
 
+---解析请求参数
 function _M.request_params()
 	local req_method = ngx.req.get_method()
 	local req_body = _read_request_body()
-
 	local req_params = _parse_request_params(req_method, req_body)
 	return req_params
+end
+
+---以 like 'routeName%' 的方式匹配路由规则
+---@param uri string 请求路径
+---@return string|nil 路由规则名称
+function _M.request_route(uri)
+	for _, route in ipairs(_M._Router_Names) do
+		if string.sub(uri, 1, #route) == route then
+			return route
+		end
+	end
+	return nil
 end
 
 return _M
