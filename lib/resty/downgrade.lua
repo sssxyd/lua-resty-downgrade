@@ -11,6 +11,21 @@ local http = require("resty.http")
 local cjson = require("cjson")
 local ffi = require("ffi")
 
+---@class z_stream: ffi.cdata*
+---@field next_in ffi.cdata*       -- 输入缓冲指针
+---@field avail_in integer         -- 输入缓冲区大小
+---@field total_in integer         -- 总共读取字节数
+---@field next_out ffi.cdata*      -- 输出缓冲指针
+---@field avail_out integer        -- 输出缓冲区大小
+---@field total_out integer        -- 总共写入字节数
+---@field msg string               -- 错误消息
+---@field state ffi.cdata*         -- 内部状态
+---@field zalloc ffi.cdata*        -- 内存分配函数
+---@field zfree ffi.cdata*         -- 内存释放函数
+---@field opaque ffi.cdata*        -- 内存上下文指针
+---@field data_type integer        -- 数据类型
+---@field adler integer            -- Adler-32 校验
+---@field reserved integer         -- 保留字段
 ffi.cdef[[
 typedef struct {
     const unsigned char *next_in;
@@ -36,9 +51,17 @@ int inflateEnd(z_stream *strm);
 
 local zlib = ffi.load("z")
 
+---@return z_stream
+local function _create_zstream()
+	---@type any
+	return ffi.new("z_stream")
+end
+
 local function _decompress_gzip(data)
     local buffer_size = 16384 -- 16KB buffer size
-    local zstream = ffi.new("z_stream")
+    ---@type z_stream
+	local zstream = _create_zstream()
+    ---@type ffi.cdata*
     local out_buffer = ffi.new("unsigned char[?]", buffer_size)
 
     zstream.next_in = data
@@ -328,19 +351,19 @@ local function _parse_toml(toml, options)
 		if num:match("%.") then float = true end
 
 		exp = exp and tonumber(exp) or 0
-		num = tonumber(num)
+		local digits = tonumber(num)
 
 		if not float then
 			return {
 				-- lua will automatically convert the result
 				-- of a power operation to a float, so we have
 				-- to convert it back to an int with math.floor
-				value = math.floor(num * 10^exp),
+				value = math.floor(digits * 10^exp),
 				type = "int",
 			}
 		end
 
-		return {value = num * 10^exp, type = "float"}
+		return {value = digits * 10^exp, type = "float"}
 	end
 
 	local parseArray, getValue
@@ -501,7 +524,7 @@ local function _parse_toml(toml, options)
 			buffer = trim(buffer)
 
 			if buffer:match("^[0-9]*$") and not quotedKey then
-				buffer = tonumber(buffer)
+				buffer = tostring(tonumber(buffer))
 			end
 
 			if buffer == "" and not quotedKey then
@@ -1110,7 +1133,7 @@ end
 function _M.request_params()
 	local req_method = ngx.req.get_method()
 	local req_body = _read_request_body()
-
+	
 	local req_params = _parse_request_params(req_method, req_body)
 	return req_params
 end
