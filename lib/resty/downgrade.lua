@@ -1,5 +1,5 @@
 local _M = {
-  _VERSION = '0.1.7',
+  _VERSION = '0.1.8',
   _Http_Timeout = 60000,
   _Http_Keepalive = 60000,
   _Http_Pool_Size = 15,
@@ -896,6 +896,19 @@ local function _is_nil_or_empty(value)
     return false
 end
 
+local function _ensure_trailing_slash(str)
+    if str:sub(-1) ~= "/" then
+        return str .. "/"
+    end
+    return str
+end
+
+local function _remove_trailing_slash(str)
+    if str:sub(-1) == "/" then
+        return str:sub(1, -2)
+    end
+    return str
+end
 
 function _M.set_http_timeout(timeout)
     if type(timeout) == "number" and timeout > 0 then
@@ -933,7 +946,8 @@ function _M.load_rules(toml_path)
 	local rules = _parse_toml(config_content)
 	local apis = ""
 	for api, rule in pairs(rules) do
-		table.insert(_M._Router_Names, api)
+		-- 确保 API 路径以斜杠结尾，方便后续匹配
+		_M._Router_Names[_ensure_trailing_slash(api)] = api
 		apis = apis .. api .. ":" .. rule["type"] .. ", "
 	end
 	ngx.log(ngx.ERR, ">>> Load Router Rules [", apis, "]")
@@ -952,7 +966,7 @@ local function request_timeout(backend_url, timeout_ms, resp_body, content_type,
     local req_body = _read_request_body()
 
     -- 构建后端请求 URL
-    local pass_url = backend_url:gsub("/+$", "") .. req_uri
+    local pass_url = _remove_trailing_slash(backend_url) .. req_uri
     if ngx.var.query_string then
         pass_url = pass_url .. "?" .. ngx.var.query_string
     end
@@ -1057,7 +1071,7 @@ local function request_callback(req_time, backend_url, callback_url, callback_cr
     local req_params = _parse_request_params(req_method, req_body)
 
     -- 构建后端请求 URL
-    local pass_url = backend_url:gsub("/+$", "") .. req_uri
+    local pass_url = _remove_trailing_slash(backend_url) .. req_uri
     if ngx.var.query_string then
         pass_url = pass_url .. "?" .. ngx.var.query_string
     end
@@ -1142,8 +1156,12 @@ end
 ---@param uri string 请求路径
 ---@return string|nil 路由规则名称
 function _M.request_route(uri)
-	for _, route in ipairs(_M._Router_Names) do
-		if string.sub(uri, 1, #route) == route then
+	if uri == nil or uri == "" then
+		return nil
+	end
+	local path = _ensure_trailing_slash(uri)
+	for key, route in pairs(_M._Router_Names) do
+		if string.sub(path, 1, #key) == key then
 			return route
 		end
 	end
