@@ -1,5 +1,5 @@
 local _M = {
-  _VERSION = '0.1.8',
+  _VERSION = '0.2.0',
   _Http_Timeout = 60000,
   _Http_Keepalive = 60000,
   _Http_Pool_Size = 15,
@@ -734,22 +734,31 @@ local function _decompress_resp_body(content_encoding, resp_body)
 	return resp_body
 end
 
-local function _read_response_body(res)
+local function _read_response_body(res, timeout_ms)
     local body_reader = res.body_reader
     local max_chunk_size = 8192 -- 每次读取的块大小，默认 8KB
     local chunks = {}
+	local start_time = ngx.now()
 
 	local resp_body = ""
     if body_reader then
         -- 使用流式读取逐块读取响应体
-        repeat
-            local chunk, read_err = body_reader(max_chunk_size)
-            if chunk then
-                table.insert(chunks, chunk)
-            elseif read_err then
-                return ""
-            end
-        until not chunk
+		repeat
+			local elapsed_time = (ngx.now() - start_time) * 1000
+			if timeout_ms > 0 and elapsed_time > timeout_ms then
+				return "", "timeout"
+			end
+		
+			local chunk, read_err = body_reader(max_chunk_size)
+			if read_err then
+				ngx.log(ngx.ERR, "Error reading chunk: ", read_err)
+				return "", read_err
+			end
+		
+			if chunk then
+				table.insert(chunks, chunk)
+			end
+		until not chunk
 
         -- 合并所有块为完整的响应体
         resp_body = table.concat(chunks)
@@ -762,17 +771,20 @@ local function _read_response_body(res)
     end
 
 	if resp_body == "" then
-		return ""
+		return "", nil
 	end
 
-	return resp_body
+	return resp_body, nil
 end
 
-local function _async_http_request(url, method, headers, body, timeout)
+local function _async_http_request(url, method, headers, body, timeout_ms)
     -- ngx.log(ngx.INFO, "[ASYNC REQUEST] URL: ", url, ", Method: ", method, ", Headers: ", cjson.encode(headers))
 
     local httpc = http.new()
-    httpc:set_timeout(timeout > 0 and timeout or _M._Http_Timeout)
+	if not httpc then
+		return nil, "Failed to create http client"
+	end
+    httpc:set_timeout(timeout_ms > 0 and timeout_ms or _M._Http_Timeout)
 
     local parsed_url = _parse_url(url)
     local scheme, host, port, path, query, fragment = parsed_url.scheme, parsed_url.host, parsed_url.port, parsed_url.path, parsed_url.query, parsed_url.fragment
@@ -813,7 +825,11 @@ local function _async_http_request(url, method, headers, body, timeout)
     end
 
     -- Read response body
-    local resp_body = _read_response_body(res)
+    local resp_body, read_err = _read_response_body(res, timeout_ms)
+	if read_err then
+		httpc:close()
+		return nil, read_err
+	end
 
     -- Set keepalive
     local keepalive_ok, keepalive_err = httpc:set_keepalive(_M._Http_Keepalive, _M._Http_Pool_Size)
