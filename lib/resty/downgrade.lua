@@ -1,11 +1,8 @@
 local _M = {
-  _VERSION = '0.2.0',
+  _VERSION = '0.2.1',
   _Http_Timeout = 60000,
   _Http_Keepalive = 60000,
   _Http_Pool_Size = 15,
-  _Routers = {},
-  _Router_Names = {},
-  _Routers_Loaded = false,
 }
 
 local http = require("resty.http")
@@ -943,11 +940,7 @@ function _M.set_http_keepalive(timeout, pool_size)
 end
 
 -- 从指定路径加载路由规则，并缓存在全局变量
-function _M.load_rules(toml_path)
-    if _M._Routers_Loaded then
-        return
-    end
-    _M._Routers_Loaded = true
+function _M.load_rules(toml_path, name_space)
 
     local config_file = io.open(toml_path, "r")
     if not config_file then
@@ -968,7 +961,8 @@ function _M.load_rules(toml_path)
 	end
 	ngx.log(ngx.ERR, ">>> Load Router Rules [", apis, "]")
 
-    _M._Routers = rules
+	-- 将路由规则缓存到共享内存中
+	ngx.shared_dict.downgrade:set(name_space, rules)
 end
 
 -- 超时降级处理
@@ -1120,12 +1114,14 @@ end
 
 ---根据传入的路由规则名称，执行该路由规则定义的操作
 ---@param route_name string 路由规则名称
+---@param name_space string 共享内存命名空间
 ---@return nil	如果没有执行任何操作，则继续执行后续的请求处理，否则结束请求处理
-function _M.proxy_pass(route_name)
-	if route_name == nil or route_name == "" then
+function _M.proxy_pass(route_name, name_space)
+	if route_name == nil or route_name == "" or name_space == nil or name_space == "" then
 		return
 	end
-	local route = _M._Routers[route_name]
+	local rules = ngx.shared_dict.downgrade:get(name_space)	or {}
+	local route = rules[route_name]
     if not route then
         return
     end
