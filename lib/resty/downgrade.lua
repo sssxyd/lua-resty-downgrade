@@ -1,5 +1,5 @@
 local _M = {
-  _VERSION = '0.2.3',
+  _VERSION = '0.2.4',
   _Http_Timeout = 60000,
   _Http_Keepalive = 60000,
   _Http_Pool_Size = 15,
@@ -909,11 +909,14 @@ local function _is_nil_or_empty(value)
     return false
 end
 
-local function _ensure_trailing_slash(str)
-    if str:sub(-1) ~= "/" then
-        return str .. "/"
-    end
-    return str
+local function _trim_route_name(route_name)
+	if route_name:sub(1, 1) == "/" then
+		route_name = route_name:sub(2)
+	end
+	if route_name:sub(-1) == "/" then
+		route_name = route_name:sub(1, -2)
+	end
+	return route_name:gsub("^%s*(.-)%s*$", "%1")
 end
 
 local function _remove_trailing_slash(str)
@@ -953,17 +956,17 @@ function _M.load_rules(toml_path, name_space)
 
 	-- ngx.log(ngx.INFO, "rules: ", config_content)
 	local rules = _parse_toml(config_content)
-	local rules_table = {}
-	local apis = ""
+	local route_names = {}
 	for api, rule in pairs(rules) do
 		-- 确保 API 路径以斜杠结尾，方便后续匹配
-		rules_table[_ensure_trailing_slash(api)] = rule
-		apis = apis .. api .. ":" .. rule["type"] .. ", "
+		-- 将路由规则缓存到共享内存中
+		local route_name = _trim_route_name(api)
+		route_names:append(route_name)
+		ngx.shared.downgrade:set(name_space .. ":" .. route_name, cjson.encode(rule))
 	end
-	ngx.log(ngx.ERR, ">>>Load [", name_space, "] Rules [", apis, "]")
-
-	-- 将路由规则缓存到共享内存中
-	ngx.shared.downgrade:set(name_space, rules_table)
+	local route_name_str = table.concat(route_names, "|")
+	ngx.shared.downgrade:set(name_space .. ":routes", route_name_str)
+	ngx.log(ngx.ERR, ">>>Load [", name_space, "] Rules [", route_name_str, "]")
 end
 
 -- 超时降级处理
@@ -1121,8 +1124,12 @@ function _M.proxy_pass(route_name, name_space)
 	if route_name == nil or route_name == "" or name_space == nil or name_space == "" then
 		return
 	end
-	local rules = ngx.shared.downgrade:get(name_space)	or {}
-	local route = rules[route_name]
+	route_name = _trim_route_name(route_name)
+	local rule_json = ngx.shared.downgrade:get(name_space .. ":" .. route_name)
+	if rule_json == nil then
+		return
+	end
+	local route = cjson.decode(rule_json)
     if not route then
         return
     end
@@ -1167,17 +1174,26 @@ end
 
 ---以 like 'routeName%' 的方式匹配路由规则
 ---@param uri string 请求路径
+---@param name_space string 适用的规则的名称空间
 ---@return string|nil 路由规则名称
-function _M.request_route(uri)
+function _M.request_route(uri, name_space)
 	if uri == nil or uri == "" then
 		return nil
 	end
-	local path = _ensure_trailing_slash(uri)
-	for key, route in pairs(_M._Router_Names) do
-		if string.sub(path, 1, #key) == key then
-			return route
-		end
+	local query = _trim_route_name(uri)
+	local route_name_str = ngx.shared.downgrade:get(name_space .. ":routes")
+	if route_name_str == nil or route_name_str == "" then
+		return nil
 	end
+	local start_pos = string.find(route_name_str, query)
+	if start_pos == nil then
+		return nil
+	end
+	local end_pos = string.find(route_name_str, "|", start_pos)
+    if end_pos then
+        return string.sub(route_name_str, start_pos, end_pos - 1)
+	end
+
 	return nil
 end
 
