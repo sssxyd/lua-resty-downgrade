@@ -1,5 +1,5 @@
 local _M = {
-  _VERSION = '0.2.4',
+  _VERSION = '0.2.5',
   _Http_Timeout = 60000,
   _Http_Keepalive = 60000,
   _Http_Pool_Size = 15,
@@ -958,10 +958,9 @@ function _M.load_rules(toml_path, name_space)
 	local rules = _parse_toml(config_content)
 	local route_names = {}
 	for api, rule in pairs(rules) do
-		-- 确保 API 路径以斜杠结尾，方便后续匹配
 		-- 将路由规则缓存到共享内存中
 		local route_name = _trim_route_name(api)
-		route_names:append(route_name)
+		table.insert(route_names, route_name)
 		ngx.shared.downgrade:set(name_space .. ":" .. route_name, cjson.encode(rule))
 	end
 	local route_name_str = table.concat(route_names, "|")
