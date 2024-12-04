@@ -1,5 +1,5 @@
 local _M = {
-  _VERSION = '0.2.1',
+  _VERSION = '0.2.2',
   _Http_Timeout = 60000,
   _Http_Keepalive = 60000,
   _Http_Pool_Size = 15,
@@ -953,16 +953,17 @@ function _M.load_rules(toml_path, name_space)
 
 	-- ngx.log(ngx.INFO, "rules: ", config_content)
 	local rules = _parse_toml(config_content)
+	local rules_table = {}
 	local apis = ""
 	for api, rule in pairs(rules) do
 		-- 确保 API 路径以斜杠结尾，方便后续匹配
-		_M._Router_Names[_ensure_trailing_slash(api)] = api
+		rules_table[_ensure_trailing_slash(api)] = rule
 		apis = apis .. api .. ":" .. rule["type"] .. ", "
 	end
-	ngx.log(ngx.ERR, ">>> Load Router Rules [", apis, "]")
+	ngx.log(ngx.ERR, ">>>Load [", name_space, "] Rules [", apis, "]")
 
 	-- 将路由规则缓存到共享内存中
-	ngx.shared_dict.downgrade:set(name_space, rules)
+	ngx.shared_dict.downgrade:set(name_space, rules_table)
 end
 
 -- 超时降级处理
