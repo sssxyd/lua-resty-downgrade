@@ -1,5 +1,5 @@
 local _M = {
-  _VERSION = '0.2.2',
+  _VERSION = '0.2.3',
   _Http_Timeout = 60000,
   _Http_Keepalive = 60000,
   _Http_Pool_Size = 15,
@@ -963,7 +963,7 @@ function _M.load_rules(toml_path, name_space)
 	ngx.log(ngx.ERR, ">>>Load [", name_space, "] Rules [", apis, "]")
 
 	-- 将路由规则缓存到共享内存中
-	ngx.shared_dict.downgrade:set(name_space, rules_table)
+	ngx.shared.downgrade:set(name_space, rules_table)
 end
 
 -- 超时降级处理
@@ -1121,7 +1121,7 @@ function _M.proxy_pass(route_name, name_space)
 	if route_name == nil or route_name == "" or name_space == nil or name_space == "" then
 		return
 	end
-	local rules = ngx.shared_dict.downgrade:get(name_space)	or {}
+	local rules = ngx.shared.downgrade:get(name_space)	or {}
 	local route = rules[route_name]
     if not route then
         return
