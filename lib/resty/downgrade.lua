@@ -1,5 +1,5 @@
 local _M = {
-  _VERSION = '0.2.6',
+  _VERSION = '0.2.7',
   _Http_Timeout = 60000,
   _Http_Keepalive = 60000,
   _Http_Pool_Size = 15,
@@ -1160,7 +1160,7 @@ function _M.proxy_pass(route_name, name_space)
         local callback_credentials = req_headers[callback_credentials_header]
         return request_callback(req_time, backend_url, callback_url, callback_credentials, resp_body, content_type, status_code)
     else
-		local timeout_ms = req_headers[timeout_ms_header] or route["timeout_ms"] or 500
+		local timeout_ms = tonumber(req_headers[timeout_ms_header]) or tonumber(route["timeout_ms"]) or 500
         return request_timeout(backend_url, timeout_ms, resp_body, content_type, status_code)
     end
 end
