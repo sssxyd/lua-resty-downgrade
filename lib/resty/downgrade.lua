@@ -1,5 +1,5 @@
 local _M = {
-  _VERSION = '0.2.5',
+  _VERSION = '0.2.6',
   _Http_Timeout = 60000,
   _Http_Keepalive = 60000,
   _Http_Pool_Size = 15,
@@ -1144,13 +1144,14 @@ function _M.proxy_pass(route_name, name_space)
 	local callback_url_header = route["callback_url_header"] or "X-Callback-URL"
     local callback_credentials_header = route["callback_credentials_header"] or "X-Callback-Credentials"
     local config_callback_url = route["callback_url"] or ""
-    local timeout_ms = route["timeout_ms"] or 500
+	local timeout_ms_header = route["timeout_ms_header"] or "X-Timeout-MS"
     local resp_body = route["resp_body"] or "{}"
     local content_type = route["content_type"] or "application/json; charset=utf-8"
     local status_code = route["status_code"] or 200
 
+	local req_headers = ngx.req.get_headers()
+
     if type == "callback" then
-		local req_headers = ngx.req.get_headers()
 		local callback_url = req_headers[callback_url_header]
 		if _is_nil_or_empty(callback_url) then
 			callback_url = config_callback_url
@@ -1159,6 +1160,7 @@ function _M.proxy_pass(route_name, name_space)
         local callback_credentials = req_headers[callback_credentials_header]
         return request_callback(req_time, backend_url, callback_url, callback_credentials, resp_body, content_type, status_code)
     else
+		local timeout_ms = req_headers[timeout_ms_header] or route["timeout_ms"] or 500
         return request_timeout(backend_url, timeout_ms, resp_body, content_type, status_code)
     end
 end
