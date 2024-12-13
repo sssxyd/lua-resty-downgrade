@@ -1,5 +1,5 @@
 local _M = {
-  _VERSION = '0.2.7',
+  _VERSION = '0.2.8',
   _Http_Timeout = 60000,
   _Http_Keepalive = 60000,
   _Http_Pool_Size = 15,
@@ -969,7 +969,7 @@ function _M.load_rules(toml_path, name_space)
 end
 
 -- 超时降级处理
-local function request_timeout(backend_url, timeout_ms, resp_body, content_type, status_code)
+local function request_timeout(route_name, backend_url, timeout_ms, resp_body, content_type, status_code)
     content_type = content_type or "application/json; charset=utf-8"
     status_code = status_code or 200
 
@@ -984,7 +984,7 @@ local function request_timeout(backend_url, timeout_ms, resp_body, content_type,
         pass_url = pass_url .. "?" .. ngx.var.query_string
     end
 
-    ngx.log(ngx.INFO, "pass timeout request: ", req_uri, " to pass_url: ", pass_url, " for timeout: ", timeout_ms, "ms")
+    ngx.log(ngx.INFO, "pass ", route_name, " request: ", req_uri, " to pass_url: ", pass_url, " for timeout: ", timeout_ms, "ms")
 
     -- 向后端服务器发送请求
     local res, err = _async_http_request(pass_url, req_method, req_headers, req_body, timeout_ms)
@@ -995,14 +995,14 @@ local function request_timeout(backend_url, timeout_ms, resp_body, content_type,
             ngx.status = status_code
             ngx.header["Content-Type"] = content_type
             ngx.say(resp_body)
-            ngx.log(ngx.INFO, "[TIMEOUT] ", "req_uri: ", req_uri, ", pass_url: ", pass_url, ", timeout: ", timeout_ms)
+            ngx.log(ngx.ERR, "[TIMEOUT_YES] ", "route: ", route_name, ", pass_url: ", pass_url, ", timeout: ", timeout_ms)
             return ngx.exit(status_code)
         else
             -- 其他错误按原样返回错误信息
             ngx.status = ngx.HTTP_INTERNAL_SERVER_ERROR
             ngx.header["Content-Type"] = "application/json; charset=utf-8"
             ngx.say(cjson.encode({ error = "Failed to connect to backend", detail = err }))
-            ngx.log(ngx.ERR, "Request to [", backend_url, "] failed: ", err)
+            ngx.log(ngx.ERR, "[TIMEOUT_ERR] route: ", route_name, " Request to [", backend_url, "] failed: ", err)
             return ngx.exit(ngx.status)
         end
     else
@@ -1017,13 +1017,13 @@ local function request_timeout(backend_url, timeout_ms, resp_body, content_type,
 end
 
 -- 异步透传请求，并在完成后回调
-local function async_request_and_callback(backend_url, request_time, request_uri, request_params, callback_url, callback_credentials, req_method, req_headers, req_body)
+local function async_request_and_callback(route_name, backend_url, request_time, request_uri, request_params, callback_url, callback_credentials, req_method, req_headers, req_body)
     ngx.log(ngx.INFO, "pass callback request ", request_uri, " to ", backend_url)
 
     -- 向后端服务器发送请求
     local res, err = _async_http_request(backend_url, req_method, req_headers, req_body, _M._Http_Timeout)
     if not res then
-        ngx.log(ngx.ERR, "async http reuest to ", backend_url, " failed: ", err)
+        ngx.log(ngx.ERR, "route: ", route_name, " async http reuest to ", backend_url, " failed: ", err)
         res = {
             status = ngx.HTTP_BAD_GATEWAY,
             headers = {
@@ -1054,7 +1054,7 @@ local function async_request_and_callback(backend_url, request_time, request_uri
     end
 
 	if _is_nil_or_empty(callback_url) or not _is_valid_http_url(callback_url) then
-		ngx.log(ngx.ERR, "[CALLBACK_NO] req_uri: ", request_uri, ", no callback, response: ", callback_body, ", status: ", res.status)
+		ngx.log(ngx.ERR, "[CALLBACK_NO] route: ", route_name , " req_uri: ", request_uri, ", no callback, response: ", callback_body, ", status: ", res.status)
 		return
 	end
 
@@ -1065,14 +1065,14 @@ local function async_request_and_callback(backend_url, request_time, request_uri
     }, callback_body, _M._Http_Timeout)
 
     if not res then
-        ngx.log(ngx.ERR, "[CALLBACK_ERR] req_uri: ", request_uri, ", callback: ", callback_url, ", error: ", err)
+        ngx.log(ngx.ERR, "[CALLBACK_ERR] route: ", route_name , " req_uri: ", request_uri, ", callback: ", callback_url, ", error: ", err)
     else
-        ngx.log(ngx.INFO, "[CALLBACK_YES] req_uri: ", request_uri, ", callback: ", callback_url, ", status: ", res.status)
+        ngx.log(ngx.ERR, "[CALLBACK_YES] route: ", route_name, " req_uri: ", request_uri, ", callback: ", callback_url, ", status: ", res.status)
     end
 end
 
 -- 同步变异步
-local function request_callback(req_time, backend_url, callback_url, callback_credentials, resp_body, content_type, status_code)
+local function request_callback(route_name, req_time, backend_url, callback_url, callback_credentials, resp_body, content_type, status_code)
     -- 获取请求方法、头信息、请求体
     local req_uri = ngx.var.uri
     local req_method = ngx.req.get_method()
@@ -1106,7 +1106,7 @@ local function request_callback(req_time, backend_url, callback_url, callback_cr
         if not status then
             ngx.log(ngx.ERR, "Async callback failed: ", err)
         end
-    end, pass_url, req_time, req_uri, req_params, callback_url, callback_credentials, req_method, req_headers, req_body)
+    end, route_name, pass_url, req_time, req_uri, req_params, callback_url, callback_credentials, req_method, req_headers, req_body)
     
     if not ok then
         ngx.log(ngx.ERR, "Failed to create timer: ", err)
@@ -1158,10 +1158,10 @@ function _M.proxy_pass(route_name, name_space)
 		end
 
         local callback_credentials = req_headers[callback_credentials_header]
-        return request_callback(req_time, backend_url, callback_url, callback_credentials, resp_body, content_type, status_code)
+        return request_callback(route_name, req_time, backend_url, callback_url, callback_credentials, resp_body, content_type, status_code)
     else
 		local timeout_ms = tonumber(req_headers[timeout_ms_header]) or tonumber(route["timeout_ms"]) or 500
-        return request_timeout(backend_url, timeout_ms, resp_body, content_type, status_code)
+        return request_timeout(route_name, backend_url, timeout_ms, resp_body, content_type, status_code)
     end
 end
 
