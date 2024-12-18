@@ -1,8 +1,8 @@
 local _M = {
-  _VERSION = '0.3.1',
-  _Http_Timeout = 60000,
-  _Http_Keepalive = 60000,
-  _Http_Pool_Size = 15,
+  _VERSION = '0.3.2',
+  _Default_Http_Timeout = 60000,
+  _Default_Http_Keepalive = 60000,
+  _Default_Http_Pool_Size = 1024,
 }
 
 local http = require("resty.http")
@@ -10,6 +10,9 @@ local cjson = require("cjson")
 local ffi = require("ffi")
 local _Domain_Routes = {}
 local _Domain_Versions = {}
+local _Http_Timeout = nil
+local _Http_Keepalive = nil
+local _Http_Pool_Size = nil
 
 ---@class z_stream: ffi.cdata*
 ---@field next_in ffi.cdata*       -- 输入缓冲指针
@@ -783,7 +786,7 @@ local function _async_http_request(url, method, headers, body, timeout_ms)
 	if not httpc then
 		return nil, "Failed to create http client"
 	end
-    httpc:set_timeout(timeout_ms > 0 and timeout_ms or _M._Http_Timeout)
+    httpc:set_timeout(timeout_ms > 0 and timeout_ms or _M.get_http_timeout())
 
     local parsed_url = _parse_url(url)
     local scheme, host, port, path, query, fragment = parsed_url.scheme, parsed_url.host, parsed_url.port, parsed_url.path, parsed_url.query, parsed_url.fragment
@@ -830,11 +833,15 @@ local function _async_http_request(url, method, headers, body, timeout_ms)
 		return nil, read_err
 	end
 
-    -- Set keepalive
-    local keepalive_ok, keepalive_err = httpc:set_keepalive(_M._Http_Keepalive, _M._Http_Pool_Size)
-    if not keepalive_ok then
-        ngx.log(ngx.ERR, "Failed to set keepalive: ", keepalive_err)
-    end
+	local do_keep_alive = _M.get_keepalive_timeout() > 0 and _M.get_keepalive_pool() > 0
+	if do_keep_alive then
+		local keepalive_ok, keepalive_err = httpc:set_keepalive(_M.get_keepalive_timeout(), _M.get_keepalive_pool())
+		if not keepalive_ok then
+			ngx.log(ngx.ERR, "Failed to set keepalive: ", keepalive_err)
+		end
+	else
+		httpc:close()
+	end
 
 	-- 将 res.headers 转换为普通的 Lua 表
 	local resp_headers = {}
@@ -1003,18 +1010,44 @@ end
 
 function _M.set_http_timeout(timeout)
     if type(timeout) == "number" and timeout > 0 then
-        _M._Http_Timeout = timeout
+        _Http_Timeout = timeout
+		ngx.shared.downgrade:set("http_timeout", timeout)
     end
 end
 
-function _M.set_http_keepalive(timeout, pool_size)
-    if type(timeout) == "number" and timeout > 0 then
-        _M._Http_Keepalive = timeout
-    end
+function _M.get_http_timeout()
+	if _Http_Timeout == nil then
+		_Http_Timeout = ngx.shared.downgrade:get("http_timeout") or _M._Default_Http_Timeout
+	end
+	return _Http_Timeout
+end
 
-    if type(pool_size) == "number" and pool_size > 0 then
-        _M._Http_Pool_Size = pool_size
-    end
+function _M.set_keepalive_timeout(timeout)
+	if type(timeout) == "number" and timeout >= 0 then
+		_Http_Keepalive = timeout
+		ngx.shared.downgrade:set("http_keepalive", timeout)
+	end
+end
+
+function _M.get_keepalive_timeout()
+	if _Http_Keepalive == nil then
+		_Http_Keepalive = ngx.shared.downgrade:get("http_keepalive") or _M._Default_Http_Keepalive
+	end
+	return _Http_Keepalive
+end
+
+function _M.set_keepalive_pool(pool_size)
+    if type(pool_size) == "number" and pool_size >= 0 then
+		_Http_Pool_Size = pool_size
+		ngx.shared.downgrade:set("http_pool_size", pool_size)
+	end
+end
+
+function _M.get_keepalive_pool()
+	if _Http_Pool_Size == nil then
+		_Http_Pool_Size = ngx.shared.downgrade:get("http_pool_size") or _M._Default_Http_Pool_Size
+	end
+	return _Http_Pool_Size
 end
 
 -- 从指定路径加载路由规则，并缓存在全局变量
@@ -1101,7 +1134,7 @@ local function async_request_and_callback(route_name, backend_url, request_time,
     ngx.log(ngx.INFO, "pass callback request ", request_uri, " to ", backend_url)
 
     -- 向后端服务器发送请求
-    local res, err = _async_http_request(backend_url, req_method, req_headers, req_body, _M._Http_Timeout)
+    local res, err = _async_http_request(backend_url, req_method, req_headers, req_body, _M.get_http_timeout())
     if not res then
         ngx.log(ngx.ERR, "route: ", route_name, " async http reuest to ", backend_url, " failed: ", err)
         res = {
@@ -1142,7 +1175,7 @@ local function async_request_and_callback(route_name, backend_url, request_time,
     res, err = _async_http_request(callback_url, "POST", {
         ["Content-Type"] = "application/json; charset=utf-8",
         ["Content-Length"] = #callback_body
-    }, callback_body, _M._Http_Timeout)
+    }, callback_body, _M.get_http_timeout())
 
     if not res then
         ngx.log(ngx.ERR, "[CALLBACK_ERR] route: ", route_name , " req_uri: ", request_uri, ", callback: ", callback_url, ", error: ", err)
