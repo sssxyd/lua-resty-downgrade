@@ -1,5 +1,5 @@
 local _M = {
-  _VERSION = '0.2.8',
+  _VERSION = '0.3.0',
   _Http_Timeout = 60000,
   _Http_Keepalive = 60000,
   _Http_Pool_Size = 15,
@@ -8,6 +8,8 @@ local _M = {
 local http = require("resty.http")
 local cjson = require("cjson")
 local ffi = require("ffi")
+local _Domain_Routes = {}
+local _Domain_Versions = {}
 
 ---@class z_stream: ffi.cdata*
 ---@field next_in ffi.cdata*       -- 输入缓冲指针
@@ -926,6 +928,72 @@ local function _remove_trailing_slash(str)
     return str
 end
 
+local function _string_split(str, delimiter)
+    local result = {}
+    local pattern = string.format("([^%s]+)", delimiter)  -- 匹配非 delimiter 的字符
+    for part in string.gmatch(str, pattern) do
+        table.insert(result, part)
+    end
+    return result
+end
+
+-- 判断一个字符串是否是另一个字符串的前缀
+local function _is_prefix(prefix, str)
+    return str:sub(1, #prefix) == prefix
+end
+
+-- 查找输入 name 中，所有能作为前缀的 key，返回最长的前缀
+local function _find_longest_prefix(name, routes)
+    local longest_prefix = ""
+    
+    for key,_ in pairs(routes) do
+        if _is_prefix(key, name) and #key > #longest_prefix then
+            longest_prefix = key
+        end
+    end
+
+    return longest_prefix
+end
+
+local function _get_route_rules(name_space)
+	if not name_space or name_space == "" then
+		return {}
+	end
+
+	-- 没有读取过路由规则配置文件
+	local toml_read_version = ngx.shared.downgrade:get(name_space .. ":version")
+	if not toml_read_version then
+		return {}
+	end
+
+	-- 配置文件没有重新读取，直接返回缓存的路由规则
+	if _Domain_Routes[name_space] ~= nil and _Domain_Routes[name_space] == toml_read_version then
+		return _Domain_Routes[name_space] or {}
+	end
+
+	-- 重新从共享内存中恢复路由规则缓存
+	local route_names_str = ngx.shared.downgrade:get(name_space .. ":routes")
+	if not route_names_str or route_names_str == "" then
+		_Domain_Routes[name_space] = {}
+	else
+		local route_names = _string_split(route_names_str, "|")
+		local rules = {}
+		for _, route_name in ipairs(route_names) do
+			local rule_str = ngx.shared.downgrade:get(name_space .. ":" .. route_name)
+			if rule_str then
+				rules[route_name] = cjson.decode(rule_str)
+			end
+		end
+		_Domain_Routes[name_space] = rules
+	end
+
+	-- 更新缓存更新时间
+	_Domain_Routes[name_space] = toml_read_version
+	
+	return _Domain_Routes[name_space]
+end
+
+
 function _M.set_http_timeout(timeout)
     if type(timeout) == "number" and timeout > 0 then
         _M._Http_Timeout = timeout
@@ -964,8 +1032,13 @@ function _M.load_rules(toml_path, name_space)
 		ngx.shared.downgrade:set(name_space .. ":" .. route_name, cjson.encode(rule))
 	end
 	local route_name_str = table.concat(route_names, "|")
-	ngx.shared.downgrade:set(name_space .. ":routes", route_name_str)
 	ngx.log(ngx.ERR, ">>>Load [", name_space, "] Rules [", route_name_str, "]")
+	local pre_namespace_routes = ngx.shared.downgrade:get(name_space .. ":routes")
+	if pre_namespace_routes then
+		route_name_str = pre_namespace_routes .. "|" .. route_name_str
+	end
+	ngx.shared.downgrade:set(name_space .. ":routes", route_name_str) 
+	ngx.shared.downgrade:set(name_space .. ":version", os.time())
 end
 
 -- 超时降级处理
@@ -1124,11 +1197,8 @@ function _M.proxy_pass(route_name, name_space)
 		return
 	end
 	route_name = _trim_route_name(route_name)
-	local rule_json = ngx.shared.downgrade:get(name_space .. ":" .. route_name)
-	if rule_json == nil then
-		return
-	end
-	local route = cjson.decode(rule_json)
+	local routes = _get_route_rules(name_space)
+	local route = routes[route_name]
     if not route then
         return
     end
@@ -1181,21 +1251,12 @@ function _M.request_route(uri, name_space)
 	if uri == nil or uri == "" then
 		return nil
 	end
+	if #uri > 1024 then
+		uri = uri:sub(1, 1024)
+	end
 	local query = _trim_route_name(uri)
-	local route_name_str = ngx.shared.downgrade:get(name_space .. ":routes")
-	if route_name_str == nil or route_name_str == "" then
-		return nil
-	end
-	local start_pos = string.find(route_name_str, query)
-	if start_pos == nil then
-		return nil
-	end
-	local end_pos = string.find(route_name_str, "|", start_pos)
-    if end_pos then
-        return string.sub(route_name_str, start_pos, end_pos - 1)
-	end
-
-	return nil
+	local routes = _get_route_rules(name_space)
+	return _find_longest_prefix(query, routes)
 end
 
 return _M
