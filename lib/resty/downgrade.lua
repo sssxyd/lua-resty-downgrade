@@ -1,5 +1,5 @@
 local _M = {
-  _VERSION = '0.3.0',
+  _VERSION = '0.3.1',
   _Http_Timeout = 60000,
   _Http_Keepalive = 60000,
   _Http_Pool_Size = 15,
@@ -944,6 +944,13 @@ end
 
 -- 查找输入 name 中，所有能作为前缀的 key，返回最长的前缀
 local function _find_longest_prefix(name, routes)
+	if not name or name == "" then
+		return nil
+	end
+	if not routes or type(routes) ~= "table" then
+		return nil
+	end
+
     local longest_prefix = ""
     
     for key, _ in pairs(routes) do
@@ -967,7 +974,7 @@ local function _get_route_rules(name_space)
 	end
 
 	-- 配置文件没有重新读取，直接返回缓存的路由规则
-	if _Domain_Routes[name_space] ~= nil and _Domain_Routes[name_space] == toml_read_version then
+	if _Domain_Versions[name_space] ~= nil and _Domain_Versions[name_space] == toml_read_version then
 		return _Domain_Routes[name_space] or {}
 	end
 
@@ -988,9 +995,9 @@ local function _get_route_rules(name_space)
 	end
 
 	-- 更新缓存更新时间
-	_Domain_Routes[name_space] = toml_read_version
+	_Domain_Versions[name_space] = toml_read_version
 	
-	return _Domain_Routes[name_space]
+	return _Domain_Routes[name_space] or {}
 end
 
 
